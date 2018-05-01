@@ -159,7 +159,7 @@ type Msg elements
   | BlurAutocomplete Time
   | DelayBlur
   | SelectElement Int
-  | SelectActivity ()
+  | SelectActivity
 
 {-| -}
 update
@@ -194,7 +194,9 @@ update msg (State ({ wrapperMsg, selectMsg, selectedElement, elements, globalTim
       State state ! []
 
     HandleKeyboardDown keyCode ->
-      if isSpecialKeyCode keyCode then
+      if keyCode == KeyCode.enter then
+        update SelectActivity (State state)
+      else if isSpecialKeyCode keyCode then
         updateSelectedElement keyCode (State state)
       else
         State state ! [ updateLastKeyboardActivity wrapperMsg ]
@@ -224,40 +226,31 @@ update msg (State ({ wrapperMsg, selectMsg, selectedElement, elements, globalTim
     DelayBlur ->
       State { state | timeBeforeBlur = 100 } ! []
 
-    SelectActivity _ ->
+    SelectActivity ->
       State { state | focused = False, timeBeforeBlur = 0 }
-        ! [ case selectedElement of
-              Nothing ->
-                Cmd.none
-              Just index ->
-                case (List.Extra.getAt index elements) of
-                  Nothing ->
-                    Cmd.none
-                  Just element ->
-                    Task.perform selectMsg (Task.succeed element)
+        ! [ selectedElement
+            |> Maybe.andThen (flip List.Extra.getAt elements)
+            |> Maybe.map (Task.perform selectMsg << Task.succeed)
+            |> Maybe.withDefault Cmd.none
           ]
 
 isSpecialKeyCode : Int -> Bool
 isSpecialKeyCode keyCode =
   keyCode == KeyCode.arrowUp
     || keyCode == KeyCode.arrowDown
-    || keyCode == KeyCode.enter
 
 updateSelectedElement : Keyboard.KeyCode -> State element msg -> (State element msg, Cmd msg)
 updateSelectedElement keyCode (State ({ wrapperMsg, elements } as state)) =
   if List.length elements > 0 && isSpecialKeyCode keyCode then
-    if keyCode == KeyCode.enter then
-      State state ! [ Task.perform (wrapperMsg << SelectActivity) (Task.succeed ()) ]
-    else
-      ( State
-        { state
-          | selectedElement =
-            changeSelectedElement
-              (State state)
-              (direction keyCode)
-        }
-      , Cmd.none
-      )
+    ( State
+      { state
+        | selectedElement =
+          changeSelectedElement
+            (State state)
+            (direction keyCode)
+      }
+    , Cmd.none
+    )
   else
     State state ! []
 
@@ -298,14 +291,14 @@ addElementInCache searchQuery elements (State ({ fetchedElements, maxResults } a
     updateElements element =
       Dict.insert searchQuery element fetchedElements
   in
-    case Dict.get searchQuery fetchedElements of
+    State <| case Dict.get searchQuery fetchedElements of
       Nothing ->
-        State { state | fetchedElements = updateElements elements_ }
+        { state | fetchedElements = updateElements elements_ }
       Just fetchedElements_ ->
         if List.containsAll fetchedElements_ elements_ then
-          State state
+          state
         else
-          State { state | fetchedElements = updateElements (List.merge elements_ fetchedElements_) }
+          { state | fetchedElements = updateElements (List.merge elements_ fetchedElements_) }
 
 selectElements : State element msg -> State element msg
 selectElements (State ({ searchQuery, fetchedElements } as state)) =
@@ -347,14 +340,6 @@ issueRequest parameter msg url =
 toLabeledList : (element -> String) -> (Int, element) -> (String, (Int, element))
 toLabeledList getLabel element = (getLabel (Tuple.second element), element)
 
-removeLabels : List (String, indexedElement) -> List indexedElement
-removeLabels elements =
-  case elements of
-    (label, element) :: tl ->
-      element :: removeLabels tl
-    [] ->
-      []
-
 groupByLabel : List (String, indexedElement) -> List (String, List indexedElement)
 groupByLabel = List.reverse << groupByLabelHelp []
 
@@ -363,18 +348,18 @@ groupByLabelHelp
   -> List (String, indexedElement)
   -> List (String, List indexedElement)
 groupByLabelHelp acc elements =
+  let removeLabels = List.map Tuple.second in
   case List.head elements of
     Just (label, element) ->
       let
         matchingElements =
           elements
-            |> List.filter (\(label_, element_) -> label_ == label)
+            |> List.filter (Tuple.first >> (==) label)
             |> removeLabels
-        others =
-          elements
-            |> List.filter (\(label_, element_) -> label_ /= label)
       in
-        groupByLabelHelp ((label, matchingElements) :: acc) others
+        groupByLabelHelp
+          ((label, matchingElements) :: acc)
+          (List.filter (Tuple.first >> (/=) label) elements)
     Nothing ->
       acc
 
@@ -385,30 +370,30 @@ elementView
   -> (Int, element)
   -> Html msg
 elementView hoverStyle (State { selectMsg, selectedElement, wrapperMsg }) elementCellView (index, element) =
-  let
-    selected =
-      case selectedElement of
-        Nothing ->
-          False
-        Just selected_ ->
-          selected_ == index
-    computedHoverStyle =
-      if selected then
-        Debug.log "test" hoverStyle
-      else
-        Debug.log "bla" []
-  in
-    Html.a
-      [ Html.Events.onClick (selectMsg element)
-      , Html.Events.onMouseEnter ((wrapperMsg << SelectElement) index)
-      , Html.Attributes.style
-        <| List.append computedHoverStyle
-        <| [ "padding" => "6px 12px"
-           , "cursor" => "pointer"
-           , "display" => "block"
-           ]
-      ]
-      [ elementCellView element ]
+  Html.a
+    [ Html.Events.onClick (selectMsg element)
+    , Html.Events.onMouseEnter ((wrapperMsg << SelectElement) index)
+    , Html.Attributes.style
+      <| List.append
+        [ "padding" => "6px 12px"
+        , "cursor" => "pointer"
+        , "display" => "block"
+        ]
+      <| computeHoverStyle selectedElement index hoverStyle
+    ]
+    [ elementCellView element ]
+
+computeHoverStyle : Maybe a -> a -> List b -> List b
+computeHoverStyle selectedElement index hoverStyle =
+  if case selectedElement of
+    Nothing ->
+      False
+    Just selected_ ->
+      selected_ == index
+  then
+    hoverStyle
+  else
+    []
 
 elementAndLabelView
    : List (String, String)
@@ -434,16 +419,17 @@ elementAndLabelView hoverStyle state elementCellView (label, elements) =
     ]
 
 inputView : State element msg -> Maybe String -> Html msg
-inputView (State { searchQuery, wrapperMsg, selectMsg, elements }) placeholder =
-  flip Html.input []
+inputView (State { searchQuery, wrapperMsg }) placeholder =
+  Html.map wrapperMsg
+    <| flip Html.input []
     <| List.append
       [ Html.Attributes.value searchQuery
       , Html.Attributes.type_ "text"
       , Html.Attributes.autocomplete False
-      , Html.Events.onInput (wrapperMsg << UpdateSearchQuery)
+      , Html.Events.onInput UpdateSearchQuery
       , Html.Attributes.tabindex 0
-      , Html.Events.onFocus (wrapperMsg FocusAutocomplete)
-      , Html.Events.onBlur (wrapperMsg DelayBlur)
+      , Html.Events.onFocus FocusAutocomplete
+      , Html.Events.onBlur DelayBlur
       , Html.Attributes.style [ "width" => "100%", "padding" => "2px" ]
       ]
     <| case placeholder of
@@ -456,7 +442,7 @@ dropdownView
   -> State element msg
   -> (element -> Html msg)
   -> Html msg
-dropdownView labels hoverStyle ((State { searchQuery, wrapperMsg, selectMsg, elements }) as state) elementCellView =
+dropdownView labels hoverStyle ((State { elements }) as state) elementCellView =
   Html.div
     [ Html.Attributes.style
       [ "background-color" => Color.Extra.toCssRgba (Color.rgb 255 255 255)
@@ -482,21 +468,22 @@ dropdownView labels hoverStyle ((State { searchQuery, wrapperMsg, selectMsg, ele
 
 {-| -}
 subscriptions : State element msg -> Float -> Sub msg
-subscriptions (State { globalTime, lastKeyboardActivity, focused, elements, timeBeforeBlur, wrapperMsg }) delay =
-  Sub.batch
+subscriptions (State state) delay =
+  let { globalTime, lastKeyboardActivity, focused, elements, timeBeforeBlur, wrapperMsg } = state in
+  Sub.map wrapperMsg <| Sub.batch
     [ if timeBeforeBlur > 0 then
-        Time.every (timeBeforeBlur * Time.millisecond) (wrapperMsg << BlurAutocomplete)
+        Time.every (timeBeforeBlur * Time.millisecond) BlurAutocomplete
       else
         Sub.none
     , if List.isEmpty elements && isElapsedDelay globalTime lastKeyboardActivity delay then
-        Time.every (delay * Time.millisecond) (wrapperMsg << UpdateGlobalTimeAndFetchRequests delay)
+        Time.every (delay * Time.millisecond) (UpdateGlobalTimeAndFetchRequests delay)
       else
         Sub.none
     , if focused then
         Sub.batch
-          [ Keyboard.presses (wrapperMsg << HandleKeyboardPress)
-          , Keyboard.ups (wrapperMsg << HandleKeyboardUp)
-          , Keyboard.downs (wrapperMsg << HandleKeyboardDown)
+          [ Keyboard.presses HandleKeyboardPress
+          , Keyboard.ups HandleKeyboardUp
+          , Keyboard.downs HandleKeyboardDown
           ]
       else
         Sub.none
