@@ -1,7 +1,7 @@
 module Autocomplete
     exposing
         ( Attributes
-        , get, input, update, subscriptions
+        , get, view, update, subscriptions
         , Msg
         , searchQuery
         , defaultAttributes
@@ -14,7 +14,7 @@ module Autocomplete
 
 @docs Attributes
 @docs get
-@docs input
+@docs view
 @docs update
 @docs subscriptions
 @docs Msg
@@ -45,41 +45,42 @@ import List.Extra
 
 import Color.Extra
 import Update.Extra as Update
-import KeyCode
+import Tuple.Extra exposing (..)
+import Html.Extra as Html
 import Helpers.List as List
-
-(=>) : a -> b -> (a, b)
-(=>) = (,)
+import KeyCode
 
 {-| -}
-type alias Attributes element =
-  { labels : Maybe (element -> String)
-  , hoverStyle : List (String, String)
-  , placeholder : Maybe String
-  }
+type Attributes element =
+  Attributes
+    { placeholder : Maybe String
+    , labels : Maybe (element -> String)
+    , hoverStyle : List (String, String)
+    }
 
 {-| -}
 defaultAttributes : Attributes element
 defaultAttributes =
-  { labels = Nothing
-  , hoverStyle =
-    [ "background-color" => Color.Extra.toCssRgba (Color.grayscale 0.1)
-    , "color" => Color.Extra.toCssRgba (Color.grayscale 0.9)
-    ]
-  , placeholder = Nothing
-  }
+  Attributes
+    { labels = Nothing
+    , hoverStyle =
+      [ "background-color" => Color.Extra.toCssRgba (Color.grayscale 0.1)
+      , "color" => Color.Extra.toCssRgba (Color.grayscale 0.9)
+      ]
+    , placeholder = Nothing
+    }
 
 {-| -}
 withLabels : (element -> String) -> Attributes element -> Attributes element
-withLabels labelFun attributes = { attributes | labels = Just labelFun }
+withLabels labelFun (Attributes attributes) = Attributes { attributes | labels = Just labelFun }
 
 {-| -}
 withHover : List (String, String) -> Attributes element -> Attributes element
-withHover hoverStyle attributes = { attributes | hoverStyle = hoverStyle }
+withHover hoverStyle (Attributes attributes) = Attributes { attributes | hoverStyle = hoverStyle }
 
 {-| -}
 withPlaceholder : String -> Attributes element -> Attributes element
-withPlaceholder placeholder attributes = { attributes | placeholder = Just placeholder }
+withPlaceholder placeholder (Attributes attributes) = Attributes { attributes | placeholder = Just placeholder }
 
 {-| -}
 type State element msg =
@@ -502,28 +503,22 @@ subscriptions (State { globalTime, lastKeyboardActivity, focused, elements, time
     ]
 
 {-| -}
-input
-   : State element msg
-  -> (element -> Html msg)
-  -> Attributes element
-  -> Html msg
-input autocomplete_ elementCellView attributes =
-    view autocomplete_ elementCellView attributes
-
 view
    : State element msg
   -> (element -> Html msg)
   -> Attributes element
   -> Html msg
-view ((State { searchQuery, wrapperMsg, selectMsg, elements, focused }) as state) elementCellView { placeholder, labels, hoverStyle } =
+view (State state) elementCellView (Attributes attributes) =
+  let { placeholder, labels, hoverStyle } = attributes
+      { elements, focused } = state in
   Html.div
     [ Html.Attributes.style [ ( "position", "relative" ) ] ]
     [ Html.div []
-      [ inputView state placeholder ]
+      [ inputView (State state) placeholder ]
     , if List.length elements > 0 && focused then
-        dropdownView labels hoverStyle state elementCellView
+        dropdownView labels hoverStyle (State state) elementCellView
       else
-        Html.text ""
+        Html.none
     ]
 
 {-| -}
