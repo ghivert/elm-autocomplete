@@ -91,7 +91,7 @@ view { autocompleteState, quote } =
       [ Autocomplete.defaultAttributes
         |> Autocomplete.withPlaceholder "Type some Chuck Norris related terms like 'plane' or 'truck'"
         |> Autocomplete.withHover [ ("background-color", "grey") ]
-        |> Autocomplete.input autocompleteState cellView
+        |> Autocomplete.view autocompleteState cellView
       , case quote of
         Nothing ->
           Html.text ""
